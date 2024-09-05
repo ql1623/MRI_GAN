@@ -488,7 +488,7 @@ class SegmentationNetwork(nn.Module):
 class Discriminator(nn.Module):
     def __init__(self, in_channels=1, features=[32,64,128,256,512]):
         super(Discriminator, self).__init__()
-        self.intitial_conv = ConvBlock(in_channels + 2, features[0])
+        self.intitial_conv = ConvBlock(in_channels + 3, features[0])
         
         layers = []
         for feat in features[:-1]:
