@@ -9,8 +9,12 @@ from utils import *
 from loss import *
 
 from encode_3.dataset_3_encode import MRI_dataset  
+import models.network_2_encode_linear as models
 
 from model_options import Options
+
+"""Have Segmentation Network separately and not inside GAN, removed other dataset version as will be using version 4 anyways""" 
+
 
 
 def train():
@@ -21,13 +25,6 @@ def train():
     checkpoint_dir = os.path.join(os.getcwd(), options.SAVE_CHECKPOINT_DIR)
 
     # define model
-    num_encoders = 2
-    if num_encoders == 2:
-        import models.network_2_encode as models 
-    elif num_encoders == 3:
-       import models.network_3_encode as models 
-    else:
-        raise Exception("Number of encoder defined not within range")
     num_features = options.NUM_FEATURES
     seg_num_features = options.NUM_SEG_FEATURES
     gen = models.datasetGAN(input_channels=1, output_channels=1, ngf=num_features, pre_out_channels=seg_num_features)
@@ -70,25 +67,25 @@ def train():
     print(f"FOLD {options.FOLD}")
     print("-------------------------------")
     
-    for epoch in range(options.NUM_EPOCHS):
-    # for epoch in range(1):
-        # count = 0
+    # for epoch in range(options.NUM_EPOCHS):
+    for epoch in range(1):
+        count = 0
         loop = tqdm(train_loader, leave=True)
         lambda_gdl_attn = lambda_gdl_attn_func(epoch)
         for index, images_labels in enumerate(loop):
-            # if count >= 5:
+            # if count >=1:
             #     break
             # else:
-            #     count +=1
+            #     count +=1               
             image_A, image_B, image_C, real_target_C, real_seg, in_out_ohe = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4], images_labels[6]
             target_labels = in_out_ohe[:,2,:].to(options.DEVICE)
             image_A, image_B, image_C, real_target_C, real_seg = image_A.to(options.DEVICE), image_B.to(options.DEVICE), image_C.to(options.DEVICE), real_target_C.to(options.DEVICE), real_seg.to(options.DEVICE)
             
-            x_concat = torch.cat((image_A, image_B), dim=1)
-            # generation
+            x_concat = torch.cat((image_A, image_B, image_C), dim=1)
+            # generate
             target_fake, image_A_recon, image_B_recon, image_C_recon, fusion_features = gen(x_concat, target_labels)
             
-            # segmentation
+            # segment
             seg_target_fake = seg(fusion_features)
 
             # ----- backward of disc ----- 
@@ -123,7 +120,7 @@ def train():
             # ----- backward of gen ----- 
             opt_gen.zero_grad()
             
-            pred_disc_fake = disc(target_fake, image_A, image_B) # D(G(x))
+            pred_disc_fake = disc(target_fake, image_A, image_B, image_C) # D(G(x))
             
             # loss for GAN
             loss_G_BCE = criterion_GAN_BCE(pred_disc_fake, torch.ones_like(pred_disc_fake))
@@ -145,23 +142,30 @@ def train():
                     options.LAMBDA_RECON_C * loss_G_reconC 
                     )
         
+        
             loss_G.backward()
             opt_gen.step()
+            # print("gen")
 
             loop.set_description(f"Epoch [{epoch+1}/{options.NUM_EPOCHS}]: Batch [{index+1}/{len(train_loader)}]")
             loop.set_postfix(loss_G=loss_G.item(), loss_D=loss_D.item(), loss_S=loss_S.item())
             
+            
+                
         scheduler_disc.step()
         scheduler_gen.step()
         scheduler_seg.step()
 
+
         if options.SAVE_MODEL:
             if (epoch+1) > 100 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
-            # if (epoch+1) == 1:
-                save_checkpoint_v2(epoch, gen, opt_gen, scheduler_gen, checkpoint_dir, options.SAVE_RESULTS_DIR_NAME, f"{epoch+1}_net_G.pth")
-                save_checkpoint_v2(epoch, disc, opt_disc, scheduler_disc, checkpoint_dir, options.SAVE_RESULTS_DIR_NAME, f"{epoch+1}_net_D.pth")
-                save_checkpoint_v2(epoch, seg, opt_seg, scheduler_seg, checkpoint_dir, options.SAVE_RESULTS_DIR_NAME, f"{epoch+1}_net_S.pth")
-            
+            # if (epoch+1)== 1:
+                save_checkpoint_v2(epoch, gen, opt_gen, scheduler_gen, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_G.pth")
+                save_checkpoint_v2(epoch, disc, opt_disc, scheduler_disc, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_D.pth")
+            # if (epoch+1) > 10 and (epoch+1) % options.CHECKPOINT_INTERVAL == 0:
+                save_checkpoint_v2(epoch, seg, opt_seg, scheduler_seg, checkpoint_dir=options.SAVE_CHECKPOINT_DIR, dir_name=options.SAVE_RESULTS_DIR_NAME, save_filename=f"{epoch+1}_net_S.pth")
+                # print("checkpoint saved")
+
     
 if __name__ == "__main__":
     train()
