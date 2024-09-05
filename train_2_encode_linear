@@ -8,8 +8,8 @@ from tqdm import tqdm
 from utils import *
 from loss import *
 
-import models.network_2_encode_linear as models
 from dataset import MRI_dataset  
+import models.network_2_encode_linear as models
 
 from model_options import Options
 
@@ -64,16 +64,16 @@ def train():
     print(f"FOLD {options.FOLD}")
     print("-------------------------------")
     
-    for epoch in range(options.NUM_EPOCHS):
-    # for epoch in range(1):
-        # count = 0
+    # for epoch in range(options.NUM_EPOCHS):
+    for epoch in range(1):
+        count = 0
         loop = tqdm(train_loader, leave=True)
         lambda_gdl_attn = lambda_gdl_attn_func(epoch)
         for index, images_labels in enumerate(loop):
-            # if count >=1:
-            #     break
-            # else:
-            #     count +=1               
+            if count >= 5:
+                break
+            else:
+                count +=1
             image_A, image_B, real_target_C, real_seg, in_out_ohe = images_labels[0], images_labels[1], images_labels[2], images_labels[3], images_labels[4]
             input_1_labels, input_2_labels, target_labels = in_out_ohe[:,0,:].to(options.DEVICE), in_out_ohe[:,1,:].to(options.DEVICE), in_out_ohe[:,2,:].to(options.DEVICE)
             image_A, image_B, real_target_C, real_seg = image_A.to(options.DEVICE), image_B.to(options.DEVICE), real_target_C.to(options.DEVICE), real_seg.to(options.DEVICE)
