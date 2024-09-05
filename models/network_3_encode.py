@@ -498,8 +498,8 @@ class Discriminator(nn.Module):
         layers.append(nn.Conv2d(features[-1], in_channels, kernel_size=3, stride=1, padding=1)) 
         self.disc = nn.Sequential(*layers)
 
-    def forward(self, x, input_x1, inputx2):
-        x = self.intitial_conv(torch.cat((x, input_x1, inputx2), 1))
+    def forward(self, x, input_x1, inputx2, inputx3):
+        x = self.intitial_conv(torch.cat((x, input_x1, inputx2, inputx3), 1))
         return self.disc(x)   
 
 def test():
