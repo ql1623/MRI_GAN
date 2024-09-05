@@ -1,0 +1,247 @@
+import os
+import numpy as np
+import torch
+import torchvision.transforms.functional as F
+from torch.utils.data import DataLoader, Dataset
+import torchvision.transforms as transforms
+
+from PIL import Image
+import random
+
+
+
+
+# change target labels to in_out_combination chosen instead of one hot from v2
+
+def set_seed(seed):
+    random.seed(seed)
+    np.random.seed(seed)
+    torch.manual_seed(seed)
+    if torch.cuda.is_available():
+        torch.cuda.manual_seed(seed)
+        torch.cuda.manual_seed_all(seed)
+    torch.backends.cudnn.deterministic = True
+    torch.backends.cudnn.benchmark = False
+
+# set_seed(42)  # You can choose any number for the seed
+
+class Make_binary:
+    def __call__(self, image):
+        return torch.where(image != 0, torch.tensor(1.0), torch.tensor(0.0))
+
+class ConvertToClassIndices:
+    def __init__(self, value_to_class):
+        self.value_to_class = value_to_class
+
+    def __call__(self, mask):
+        if isinstance(mask, Image.Image):
+            mask = torch.from_numpy(np.array(mask)).long()
+        else:
+            mask = mask.long()
+        # mapping = torch.zeros_like(mask)
+        for k, v in self.value_to_class.items():
+            mask[mask == k] = v
+        return mask
+    
+def get_transform_params():
+    new_h = new_w = 286
+    crop_size = 256
+    x = random.randint(0, np.maximum(0, new_w - crop_size))
+    y = random.randint(0, np.maximum(0, new_h - crop_size))
+    flip = random.random() > 0.5
+    return {'crop_pos': (x, y), 'flip': flip}
+
+def get_transforms(grayscale=True, params=None, resize_method=transforms.InterpolationMode.BICUBIC, convert=True, is_train=True):
+    transform_list = []
+    resize_train_shape = [286, 286]
+    resize_test_shape = [256, 256]
+    crop_size = 256
+
+    if is_train:
+        transform_list.append(transforms.Resize(resize_train_shape, resize_method))
+
+        if params is None:
+            transform_list.append(transforms.RandomCrop(crop_size))
+            transform_list.append(transforms.RandomHorizontalFlip())
+        else:
+            transform_list.append(transforms.Lambda(lambda img: img.crop((params['crop_pos'][0], params['crop_pos'][1], params['crop_pos'][0] + crop_size, params['crop_pos'][1] + crop_size))))
+            if params['flip']:
+                transform_list.append(transforms.Lambda(lambda img: img.transpose(Image.FLIP_LEFT_RIGHT)))
+    else:
+        transform_list.append(transforms.Resize(resize_test_shape, resize_method))
+        
+    if convert:
+        transform_list.append(transforms.ToTensor())
+        if grayscale:
+            transform_list.append(transforms.Normalize(mean=[0.5], std=[0.5]))
+
+        
+    return transforms.Compose(transform_list)
+
+def get_seg_transforms(params, resize_method=Image.NEAREST, seg_class="binary", is_train=True):
+    transform_list = []
+    resize_train_shape = [286, 286]
+    resize_test_shape = [256, 256]
+    crop_size = 256
+
+    if is_train:
+        transform_list = [
+            transforms.Resize(resize_train_shape, resize_method),
+            transforms.Lambda(lambda img: img.crop((params['crop_pos'][0], params['crop_pos'][1], params['crop_pos'][0] + crop_size, params['crop_pos'][1] + crop_size))),
+            transforms.Lambda(lambda img: img.transpose(Image.FLIP_LEFT_RIGHT) if params['flip'] else img),
+        ]
+    else:
+        transform_list = [
+            transforms.Resize(resize_test_shape, resize_method)
+        ]
+        
+
+    transform_list.append(transforms.ToTensor())
+    transform_list.append(Make_binary())     
+    return transforms.Compose(transform_list)
+
+# def reverse_map(mask):
+#     # Define the ranges for each value
+#     value_ranges = {
+#         3: (0.9, 1.1),   # range around 1.0
+#         2: (0.6, 0.8),  # range around 0.7
+#         1: (0.2, 0.5),  # range around 0.4
+#     }
+    
+#     # mask_np = np.array(mask)
+#     for label, (low, high) in value_ranges.items():
+#         mask = torch.where((mask >= low) & (mask <= high), torch.tensor(label), mask)
+    
+#     return mask.long()
+#     # return mask
+def save_img_list(img_list, img_list_dir, is_train):
+    if is_train: 
+        data_type = "train" 
+    else: 
+        data_type = "test" 
+    with open(os.path.join(img_list_dir, f"{data_type}_img_list.txt"), 'a') as file:
+        for index, img_details in enumerate(img_list):
+            file.write(f"{index}: {img_details}\n")
+
+class MRI_dataset(Dataset):
+    def __init__(self, input_modalities, data_png_dir, transform=True, train=True, fold=0, comb_seed=None):
+        self.input_modalities = input_modalities
+        self.data_png_dir = data_png_dir
+        self.transform = transform
+        self.train = train
+        self.fold = fold
+        # self.shuffle = shuffle
+        self.comb_seed = comb_seed
+        
+        if self.train:
+            txt_file_path = os.path.join(data_png_dir, f'train_patient_fold_{fold}.txt')
+        else:
+            txt_file_path = os.path.join(data_png_dir, f'test_patient_fold_{fold}.txt')
+        
+        with open(txt_file_path, 'r') as file:
+            patient_ids = [line.strip() for line in file.readlines()]
+
+        modalities = self.input_modalities.split("_")
+        mod_A, mod_B, mod_C = modalities[0], modalities[1], modalities[2]
+        # "t1", t2, flair
+        self.img_paths = {
+            0: os.path.join(self.data_png_dir, mod_A),
+            1: os.path.join(self.data_png_dir, mod_B),
+            2: os.path.join(self.data_png_dir, mod_C)
+        }
+        self.seg_img_paths = os.path.join(self.data_png_dir, "seg")
+        
+        self.img_lists = os.listdir(self.seg_img_paths)
+        
+        self.valid_triplets = [
+            "t1_t1ce_t2",
+            "t1_t1ce_flair",
+            "t1_t2_flair",
+            "t1ce_t2_flair"
+        ]
+        self.in_out_combinations = [
+            (0, 1, 2),
+            (0, 2, 1),
+            (1, 2, 0)
+        ]
+        
+        self.all_comb_img_lists = []
+        
+        if self.comb_seed is not None:
+            for pat_id in patient_ids:
+                img_list = os.listdir(os.path.join(self.seg_img_paths, pat_id))
+                for img_name in img_list:
+                    self.all_comb_img_lists.append((os.path.join(pat_id, img_name), self.comb_seed))
+        else:          
+            for pat_id in patient_ids:
+                img_list = os.listdir(os.path.join(self.seg_img_paths, pat_id))
+                for img_name in img_list:
+                    for comb in self.in_out_combinations:
+                        self.all_comb_img_lists.append((os.path.join(pat_id, img_name), comb))
+        
+    
+        self.total_len = len(self.all_comb_img_lists)
+
+    def check_input_seq(self, input_seq):
+        input_term = input_seq.split("_")
+        
+        if len(input_term) == 3:
+            input_set = set(input_term)
+            for triplet in self.valid_triplets:
+                if input_set == set(triplet.split('_')):
+                    return True
+            return False
+
+        else:
+            print("Input Sequence / Modality Direction specified is in wrong format")
+            return False
+
+    def __getitem__(self, idx):
+        if not self.check_input_seq(self.input_modalities):
+            print("Invalid input modalities format")
+            return None, None, None, None
+        
+        img_filepath, (img_A_ori_idx, img_B_ori_idx, img_C_ori_idx) = self.all_comb_img_lists[idx]
+
+        img_id = (img_filepath.split("/")[1]).split(".")[0]
+        
+        pil_A = Image.open(os.path.join(self.img_paths[0], img_filepath))
+        pil_B = Image.open(os.path.join(self.img_paths[1], img_filepath))
+        pil_C = Image.open(os.path.join(self.img_paths[2], img_filepath))
+                
+        pil_seg = Image.open(os.path.join(self.seg_img_paths, img_filepath))
+        
+        if self.transform:
+            transform_params = get_transform_params()
+
+            transform = get_transforms(grayscale=True, params=transform_params, convert=True, is_train=self.train)
+            seg_transform = get_seg_transforms(params=transform_params, seg_class=self.seg_class, is_train=self.train)
+            
+            tensor_A = transform(pil_A)
+            tensor_B = transform(pil_B)
+            tensor_C = transform(pil_C)
+            tensor_seg = seg_transform(pil_seg)
+            
+        else:
+            tensor_A = torch.tensor(np.array(pil_A, dtype=np.float32))
+            tensor_B = torch.tensor(np.array(pil_B, dtype=np.float32))
+            tensor_C = torch.tensor(np.array(pil_C, dtype=np.float32))
+            tensor_seg = torch.tensor(np.array(pil_seg, dtype=np.float32))
+            
+        l_tensor = [tensor_A, tensor_B, tensor_C]
+        tensor_target = l_tensor[img_C_ori_idx]
+        l_tensor[img_C_ori_idx] = torch.zeros_like(tensor_B)
+             
+        in_out_comb = torch.tensor([img_A_ori_idx, img_B_ori_idx, img_C_ori_idx])
+        in_out_ohe = F.one_hot(in_out_comb, 3).float()
+        
+        # always t1, t2, flair, target
+        return l_tensor[0], l_tensor[1], l_tensor[2], tensor_target, tensor_seg, in_out_comb, in_out_ohe, img_id
+    
+    def __len__(self):
+        return self.total_len
+    
+
+if __name__ == "__main__":
+    
+    pass
