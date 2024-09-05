@@ -9,7 +9,7 @@ from utils import *
 from loss import *
 
 from encode_3.dataset_3_encode import MRI_dataset  
-import models.network_2_encode_linear as models
+import models.network_3_encode as models
 
 from model_options import Options
 
@@ -92,12 +92,13 @@ def train():
             # -- Disc loss for fake --
             set_require_grad(disc, True)
             opt_disc.zero_grad()
-            pred_disc_fake = disc(target_fake.detach(), image_A, image_B) # as dont want to backward this 
+            pred_disc_fake = disc(target_fake.detach(), image_A, image_B, image_C) # as dont want to backward this 
+            # import pdb; pdb.set_trace()
             fake_labels = torch.zeros_like(pred_disc_fake)
             loss_D_fake = criterion_GAN_BCE(pred_disc_fake, fake_labels) # D(G(x))
             
             # -- Disc loss for real --
-            pred_disc_real = disc(real_target_C, image_A, image_B)
+            pred_disc_real = disc(real_target_C, image_A, image_B, image_C)
             real_labels = torch.ones_like(pred_disc_real)
             loss_D_real = criterion_GAN_BCE(pred_disc_real, real_labels) # D(x)
             
@@ -105,12 +106,14 @@ def train():
             loss_D = (loss_D_fake + loss_D_real) / 2
             loss_D.backward()
             opt_disc.step()
+            # print("disc")
             
             # ----- backward of seg ----- 
             # loss for segmentation
             set_require_grad(disc, False)
             opt_seg.zero_grad()
             loss_S_BCE = criterion_SEG_BCE(seg_target_fake, real_seg) # S(G(x))
+
             loss_S_DICE = dice_loss(torch.sigmoid(torch.squeeze(seg_target_fake, dim=1)), torch.squeeze(real_seg, dim=1).float(), multiclass=False)
             
             loss_S = options.LAMBDA_SEG_BCE * loss_S_BCE + options.LAMBDA_SEG_DICE * loss_S_DICE
